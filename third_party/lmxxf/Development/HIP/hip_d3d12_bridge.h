@@ -77,11 +77,21 @@ public:
  void Create(ID3D12CommandQueue*q,Options options,const std::vector<float>&noise){
   if(network||queue||!q)throw std::runtime_error("bridge already initialized/invalid queue");if(q->GetDesc().Type!=D3D12_COMMAND_LIST_TYPE_DIRECT&&q->GetDesc().Type!=D3D12_COMMAND_LIST_TYPE_COMPUTE)throw std::runtime_error("bridge requires DIRECT or COMPUTE queue");queue=q;queue->AddRef();Check(q->GetDevice(IID_PPV_ARGS(&device)),"queue device");pixels=size_t(options.width)*options.height;
   options.pooled=true;options.profile=false;options.dump_dir.clear();
+  // Proton/Linux: D3D12 LUID has no R0600 counterpart. LMXXF_HIP_DEVICE=N
+  // (or DLSSNR_HIP_DEVICE=N) selects the HIP index directly. Absent on
+  // Windows, so default LUID matching is unchanged there.
+  int hip_override=-1;
+  if(const char*e=std::getenv("LMXXF_HIP_DEVICE"))
+   if(e[0])hip_override=std::atoi(e);
+  if(hip_override<0)
+   if(const char*e=std::getenv("DLSSNR_HIP_DEVICE"))
+    if(e[0])hip_override=std::atoi(e);
   // Pick the HIP device that is the game's D3D12 adapter. Hosts with an iGPU or a second card expose several HIP devices
   // LUID is authoritative even when a host spoofs DXGI VendorId/Description.
   // Name fallback requires AMD DXGI identity and exactly one HIP device without a LUID.
   IDXGIFactory4*factory{};IDXGIAdapter1*adapter{};Check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)),"factory");auto hr=factory->EnumAdapterByLuid(device->GetAdapterLuid(),IID_PPV_ARGS(&adapter));factory->Release();Check(hr,"D3D adapter");DXGI_ADAPTER_DESC1 desc{};adapter->GetDesc1(&desc);adapter->Release();char dname[256]{};WideCharToMultiByte(CP_UTF8,0,desc.Description,-1,dname,256,nullptr,nullptr);
   {Api probe(options.runtime);probe.Check(probe.hipInit(0),"hipInit");probe.Check(probe.hipRuntimeGetVersion(&runtime_version),"runtime version");int count{};probe.Check(probe.hipGetDeviceCount(&count),"device count");int chosen=-1,name_match=-1,name_matches=0;std::string seen;const LUID wanted=device->GetAdapterLuid();for(int i=0;i<count;i++){char hname[256]{};if(probe.hipDeviceGetName(hname,256,i))continue;auto prop=probe.Properties(i);bool has_luid=false;for(char c:prop.luid)has_luid|=c!=0;if(has_luid&&!memcmp(prop.luid,&wanted,sizeof wanted)){chosen=i;device_match="luid";}if(!has_luid&&desc.VendorId==0x1002&&!strcmp(dname,hname)){name_match=i;name_matches++;}if(!seen.empty())seen+=" | ";seen+=std::to_string(i)+":"+hname+":"+prop.gcnArchName;}
+   if(hip_override>=0&&hip_override<count){chosen=hip_override;device_match="env";}
    if(chosen<0&&name_matches==1){chosen=name_match;device_match="name";}
    if(chosen<0)throw std::runtime_error(std::string("no HIP device matches D3D12 adapter '")+dname+"' (HIP devices: "+(seen.empty()?"none":seen)+")");options.device=unsigned(chosen);hip_device=chosen;auto props=probe.Properties(chosen);architecture=std::string(props.gcnArchName,strnlen(props.gcnArchName,sizeof props.gcnArchName));architecture=architecture.substr(0,architecture.find(':'));adapter_name=dname;
 probe.Check(probe.hipSetDevice(chosen),"select device");size_t total=0;if(probe.hipMemGetInfo(&free_at_create,&total))free_at_create=0;}

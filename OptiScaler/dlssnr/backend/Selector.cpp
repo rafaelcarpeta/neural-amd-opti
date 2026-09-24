@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "Selector.h"
+#include "../amd/ProtonBridge.h"
 #include <Config.h>
 #include <Util.h>
 #include <filesystem>
@@ -35,9 +36,22 @@ Kind ActiveKindFromConfig()
         const auto dir = Util::DllPath().parent_path();
         const bool hasDaniel = std::filesystem::exists(dir / L"dlssnr_amd_pass1.dll", ec);
         const bool hasLmxxf = std::filesystem::exists(dir / L"LmxxfNrRuntime.dll", ec);
+        // Proton/Wine: Daniel is Windows-only (CreateThread filter, Toolhelp,
+        // IAT patch, NT-only flows). Prefer the portable Lmxxf path whenever
+        // its runtime is present, even if a Daniel pass DLL happens to exist.
+        if (Proton::IsWine())
+        {
+            if (hasLmxxf && LmxxfWired())
+                return Kind::Lmxxf;
+            return ActiveKind(requested == Kind::Daniel ? Kind::Off : requested);
+        }
         if (hasLmxxf && !hasDaniel && LmxxfWired())
             return Kind::Lmxxf;
     }
+    // Explicit NrBackend=daniel under Wine never initializes (see AmdBridge::Run
+    // fail-safe); resolve it to Off here so menus/logs stay consistent.
+    if (Proton::IsWine() && requested == Kind::Daniel)
+        return Kind::Off;
     return ActiveKind(requested);
 }
 

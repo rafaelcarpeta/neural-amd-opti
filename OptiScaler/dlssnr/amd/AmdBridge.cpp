@@ -8,6 +8,7 @@
 #include "../backend/DanielBackend.h"
 #include "../backend/LmxxfBackend.h"
 #include "../backend/Selector.h"
+#include "ProtonBridge.h"
 #include "../backend/LmxxfEvaluateCut.h"
 #include "../backend/LmxxfGenerationObserver.h"
 #include "../submission/SubmissionHooks.h"
@@ -378,6 +379,18 @@ static bool Run(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, ID3
     const auto active = DlssNr::Backend::ActiveKindFromConfig();
     if (active == DlssNr::Backend::Kind::Off)
         return true;
+    // Fail-safe: Daniel is Windows-only. Never construct it under Wine even if
+    // configuration/files disagree with the Selector policy above.
+    if (DlssNr::Proton::IsWine() && active == DlssNr::Backend::Kind::Daniel)
+    {
+        static bool loggedProtonDaniel = false;
+        if (!loggedProtonDaniel)
+        {
+            loggedProtonDaniel = true;
+            Message("AMD pre-SR: daniel backend is Windows-only; bypassing NR under Wine (use lmxxf)");
+        }
+        return true;
+    }
     if (requested == DlssNr::Backend::Kind::Lmxxf && !DlssNr::Backend::LmxxfWired())
     {
         static bool loggedLmxxfFallback = false;
